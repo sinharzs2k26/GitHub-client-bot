@@ -15,7 +15,7 @@ from telegram.warnings import PTBUserWarning
 # Logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-TOKEN = "8556710977:AAH4LasjgfKTpFPgeAG2bM2tqqo7pDGwliQ"
+TOKEN = os.environ.get("TOKEN")
 # States
 LOGIN, CREATE_NAME, SEARCH_QUERY, REPO_MANAGE, RENAME_REPO, NEW_FILE_PATH, NEW_FILE_CONTENT, EDIT_FILE_CONTENT, RENAME_FILE_NEW_NAME, CONFIRM_ACTION = range(10)
 
