@@ -75,7 +75,45 @@ def format_size(size):
 
 # --- Entry Commands ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Welcome! Use /login to provide your GitHub PAT.")
+    user_name = update.effective_user.first_name
+    text = (
+        f"👋 Hello, *{user_name}*!\n\n"
+        "Welcome to the **GitHub Manager Bot** — your all-in-one assistant for managing repositories, "
+        "files, branches, tags, and releases directly from Telegram.\n\n"
+        "**Quick Start:**\n"
+        "• Use `/login` to authenticate with your GitHub Personal Access Token (PAT).\n"
+        "• Use `/list_repos` to view and manage your repositories.\n"
+        "• Use `/help` for a full overview of available features and usage guidelines."
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
+    return ConversationHandler.END
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "📖 *GitHub Manager Bot — User Guide*\n\n"
+        "**🔑 Authentication**\n"
+        "• `/login` — Link your GitHub Personal Access Token (PAT). Ensure your PAT has the `repo` scope to enable editing, private repositories, and releases.\n\n"
+        "**📂 Repository Actions**\n"
+        "• `/list_repos` — Paginated browser (10 repos/page) with quick-switch controls.\n"
+        "• `/search <query>` — Quickly find a specific public or private repository.\n"
+        "• **Visibility Toggle** — Change repository visibility between *Public 🔓* and *Private 🔒*.\n"
+        "• **Archiving** — Archive or unarchive repositories directly from the management dashboard.\n"
+        "• **Rename / Delete** — Rename repositories or delete them via confirmed actions.\n\n"
+        "**🗂️ File & Media Editor**\n"
+        "• **Browse & Read** — Navigate folders and preview text or code in chat.\n"
+        "• **Text Editing** — Send updated text directly to commit changes.\n"
+        "• **Media Replacement** — Overwrite binary assets (`.png`, `.jpg`, `.mp4`, `.mp3`, `.pdf`, etc.) by sending regular compressed media or uncompressed documents.\n"
+        "• **New File** — Create and commit a new file with custom paths from the menu.\n\n"
+        "**🚀 Releases & Tags**\n"
+        "• **Releases Tab** — Inspect releases, browse tags, download build assets directly, or grab download links.\n"
+        "• **Tags Tab** — View all git tags or delete remote tags.\n"
+        "• **Release Editing** — Update release titles, Markdown descriptions, tags, and classifications (*None*, *Pre-release*, *Latest*).\n"
+        "• **Asset Operations** — Upload new binary release assets or delete outdated ones.\n"
+        "• **Create Release** — Guided 5-step wizard to configure tag, target branch, title, description, release label, and binary assets.\n\n"
+        "**❌ General Navigation**\n"
+        "• Most inline menus include **Back** and **Close** buttons to exit or navigate easily."
+    )
+    await update.message.reply_text(text, parse_mode="Markdown")
     return ConversationHandler.END
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1368,6 +1406,7 @@ def main():
     conv = ConversationHandler(
         entry_points=[
             CommandHandler('start', start), 
+            CommandHandler('help', help_command),
             CommandHandler('login', login_cmd),
             CommandHandler('logout', logout_start),
             CommandHandler('repositories', repositories), 
