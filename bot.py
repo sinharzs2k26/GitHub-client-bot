@@ -82,7 +82,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "files, branches, tags, and releases directly from Telegram.\n\n"
         "**Quick Start:**\n"
         "• Use `/login` to authenticate with your GitHub Personal Access Token (PAT).\n"
-        "• Use `/list_repos` to view and manage your repositories.\n"
+        "• Use `/repositories` to view and manage your repositories.\n"
         "• Use `/help` for a full overview of available features and usage guidelines."
     )
     await update.message.reply_text(text, parse_mode="Markdown")
@@ -94,7 +94,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "**🔑 Authentication**\n"
         "• `/login` — Link your GitHub Personal Access Token (PAT). Ensure your PAT has the `repo` scope to enable editing, private repositories, and releases.\n\n"
         "**📂 Repository Actions**\n"
-        "• `/list_repos` — Paginated browser (10 repos/page) with quick-switch controls.\n"
+        "• `/repositories` — Paginated browser (10 repos/page) with quick-switch controls.\n"
         "• `/search <query>` — Quickly find a specific public or private repository.\n"
         "• **Visibility Toggle** — Change repository visibility between *Public 🔓* and *Private 🔒*.\n"
         "• **Archiving** — Archive or unarchive repositories directly from the management dashboard.\n"
