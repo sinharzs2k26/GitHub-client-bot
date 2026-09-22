@@ -77,13 +77,14 @@ def format_size(size):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name
     text = (
-        f"👋 Hello, *{user_name}*!\n\n"
-        "Welcome to the **GitHub Manager Bot** — your all-in-one assistant for managing repositories, "
-        "files, branches, tags, and releases directly from Telegram.\n\n"
-        "**Quick Start:**\n"
-        "• Use `/login` to authenticate with your GitHub Personal Access Token (PAT).\n"
-        "• Use `/repositories` to view and manage your repositories.\n"
-        "• Use `/help` for a full overview of available features and usage guidelines."
+        f"👋 Hey there, *{user_name}*! ✨\n\n"
+        "🤖 Welcome to **GitHub Manager Bot** — your all-in-one pocket terminal 📱 "
+        "to manage repositories 📂, code files 📝, branches 🌿, tags 🏷️, and releases 🚀 directly from Telegram! ⚡\n\n"
+        "🏁 **Quick Start Guide:**\n"
+        "🔑 `/login` — Authenticate securely with your GitHub Personal Access Token (PAT)\n"
+        "📋 `/list_repos` — Browse & manage your repositories\n"
+        "📖 `/help` — View full feature details & step-by-step guides\n\n"
+        "Ready to build? 💻 Let's get started! 🔥"
     )
     await update.message.reply_text(text, parse_mode="Markdown")
     return ConversationHandler.END
