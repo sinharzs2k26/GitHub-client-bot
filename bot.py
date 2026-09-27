@@ -435,16 +435,7 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/create - Create a new repository"
         )
         return ConversationHandler.END
-
-    elif action == "ignore":
-        await query.answer()
-        return
     
-    repo = context.user_data['active_repo']
-    repo_name = repo.rsplit('/', 1)[-1]
-    token = context.user_data['token']
-    restricted_actions = ["m_newf", "m_rename", "f_edit", "f_ren", "f_del"]
-
     if action.startswith("page_"):
         await query.answer()
         new_page = int(action.split("_")[1])
@@ -455,6 +446,15 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard += [[InlineKeyboardButton("❌ Close", callback_data="m_close")]]
         await query.edit_message_text("📂 Select a repository:", reply_markup=InlineKeyboardMarkup(keyboard))
         return REPO_MANAGE
+    
+    elif action == "ignore":
+        await query.answer()
+        return
+    
+    repo = context.user_data['active_repo']
+    repo_name = repo.rsplit('/', 1)[-1]
+    token = context.user_data['token']
+    restricted_actions = ["m_newf", "m_rename", "f_edit", "f_ren", "f_del"]
 
     if action in restricted_actions:
         res = github_req("GET", f"/repos/{repo}", token)
