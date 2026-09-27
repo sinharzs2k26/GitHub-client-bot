@@ -293,7 +293,7 @@ async def login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if token:
         await update.message.reply_text("You are already logged in!")
     else:
-        await update.message.reply_text("🔑 Please send your GitHub Personal Access Token (PAT):")
+        await update.message.reply_text("🔑 Please send your GitHub Personal Access Token (PAT):\nOr /cancel.")
         return LOGIN
 
 async def login_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
