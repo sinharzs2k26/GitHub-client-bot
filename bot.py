@@ -289,7 +289,8 @@ async def admin_callback_router(update: Update, context: ContextTypes.DEFAULT_TY
 
 # --- Login Flow ---
 async def login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if 'token' in context.user_data:
+    token = await get_user_token(update, context)
+    if token:
         await update.message.reply_text("You are already logged in!")
     else:
         await update.message.reply_text("🔑 Please send your GitHub Personal Access Token (PAT):")
@@ -320,17 +321,7 @@ async def login_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
             upsert=True
         )
         
-        try:
-            await update.message.delete()
-        except TelegramError:
-            pass
-
-        await update.message.reply_text(
-            f"✅ Logged in successfully as *{gh_username}*!\n"
-            "Your session is securely saved across server restarts.\n\n"
-            "Use `/list_repos` to start browsing.",
-            parse_mode="Markdown"
-        )
+        await update.message.reply_text(f"✅ Logged in as {res.json()['login']}!\n\nIf you want to logout, send /logout.", parse_mode="Markdown")
         return ConversationHandler.END
     else:
         await update.message.reply_text(
@@ -1555,10 +1546,15 @@ async def process_incoming_file_asset_uploads(update: Update, context: ContextTy
 
 
 async def confirm_action_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
     query = update.callback_query
     await query.answer()
     
     if query.data == "conf_pat_yes":
+        await users_col.update_one(
+                {"user_id": user_id},
+                {"$unset": {"github_token": "", "github_username": ""}}
+            )
         context.user_data.clear()
         await query.edit_message_text(
             "🔒 *Logged out successfully.*\nYour PAT has been cleared from the bot's memory.",
