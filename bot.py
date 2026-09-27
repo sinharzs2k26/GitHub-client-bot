@@ -3,6 +3,9 @@ import logging
 import requests
 import base64
 import io
+from motor.motor_asyncio import AsyncIOMotorClient
+import asyncio
+from telegram.error import TelegramError
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -16,7 +19,20 @@ from telegram.warnings import PTBUserWarning
 # Logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-TOKEN = os.getenv("TOKEN")
+# --- Database & Admin Config ---
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://nasrinlipi41:q47VOWZnd2I8QPPr@botusersdb.lnhi5sd.mongodb.net/?appName=botusersdb")
+DB_NAME = "github_bot_db"
+ADMIN_ID = 7728700576
+
+mongo_client = AsyncIOMotorClient(MONGO_URI)
+db = mongo_client[DB_NAME]
+users_col = db["users"]
+
+# Admin state constant
+BROADCAST_MSG = 30
+
+TOKEN = os.getenv("TOKEN", "8556710977:AAEIZeczuDNt2Xb_pftheCEOu7PSYJ5rCFQ")
+
 # States
 (LOGIN, CREATE_NAME, SEARCH_QUERY, REPO_MANAGE, RENAME_REPO, NEW_FILE_PATH, NEW_FILE_CONTENT, EDIT_FILE_CONTENT, RENAME_FILE_NEW_NAME, CONFIRM_ACTION, RELEASE_MENU, CHOOSE_RELEASE, CHOOSE_TAG, EDIT_RELEASE_MENU, EDIT_TEXT_FIELD, SAVE_TAG_SHIFT_MANUAL, CONFIRM_RELEASE_DEL, CONFIRM_ASSET_DEL, CREATE_REL_TAG, CREATE_REL_TARGET, CREATE_REL_TITLE, CREATE_REL_DESC, CREATE_REL_LABEL, CREATE_REL_ASSETS, CREATE_REL_TAG_MANUAL) = range(25)
  
@@ -30,6 +46,19 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
 def run_health_server():
     httpd = HTTPServer(('0.0.0.0', 10000), HealthCheckHandler)
     httpd.serve_forever()
+
+async def save_or_update_user(user):
+    await users_col.update_one(
+        {"user_id": user.id},
+        {
+            "$set": {
+                "user_id": user.id,
+                "username": user.username,
+                "name": user.full_name
+            }
+        },
+        upsert=True
+    )
 
 # --- Helpers ---
 def github_req(method, endpoint, token, data=None):
@@ -75,16 +104,20 @@ def format_size(size):
 
 # --- Entry Commands ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_name = update.effective_user.first_name
-    text = (
-        f"👋 Hello, *{user_name}*!\n\n"
-        "Welcome to the **GitHub Manager Bot** — your all-in-one assistant for managing repositories, "
-        "files, branches, tags, and releases directly from Telegram.\n\n"
-        "**Quick Start:**\n"
-        "• Use `/login` to authenticate with your GitHub Personal Access Token (PAT).\n"
-        "• Use `/repositories` to view and manage your repositories.\n"
-        "• Use `/help` for a full overview of available features and usage guidelines."
-    )
+    user = update.effective_user
+    if user:
+        await save_or_update_user(user)
+        user_name = user.first_name
+    
+        text = (
+                f"👋 Hey there, *{user_name}*! ✨\n\n"
+                "🤖 Welcome to **GitHub Manager Bot** — your all-in-one pocket terminal 📱 "
+                "to manage repositories, code files, branches, tags, and releases 🚀 directly from Telegram!\n\n"
+                "🏁 **Quick Start Guide:**\n"
+                "/login — Authenticate securely with your GitHub Personal Access Token (PAT)\n"
+                "/repositories — Browse & manage your repositories\n"
+                "/help — View full feature details & step-by-step guides\n\n"
+            )
     await update.message.reply_text(text, parse_mode="Markdown")
     return ConversationHandler.END
 
@@ -138,6 +171,127 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
     
+async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id != ADMIN_ID:
+        if update.message:
+            await update.message.reply_text("⛔ Access denied.")
+        return ConversationHandler.END
+
+    total_users = await users_col.count_documents({})
+    text = (
+        "👑 *Admin Control Panel*\n\n"
+        f"👥 *Total Registered Users:* `{total_users}`"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("🔄 Refresh Count", callback_data="admin_refresh")],
+        [InlineKeyboardButton("📋 View Users Data", callback_data="admin_view_users_0")],
+        [InlineKeyboardButton("📢 Broadcast Message", callback_data="admin_broadcast_prompt")],
+        [InlineKeyboardButton("❌ Close Panel", callback_data="admin_close")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer("Refreshed!")
+        await query.edit_message_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+    else:
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+
+async def show_users_data(query, page=0):
+    page_size = 10
+    total_users = await users_col.count_documents({})
+    
+    cursor = users_col.find({}).skip(page * page_size).limit(page_size)
+    users = await cursor.to_list(length=page_size)
+
+    text = f"📋 *Registered Users List (Page {page + 1})*\nTotal: `{total_users}`\n\n"
+    for idx, u in enumerate(users, start=(page * page_size) + 1):
+        uname = f"@{u['username']}" if u.get('username') else "No Username"
+        text += f"{idx}. *{u.get('name', 'N/A')}*\n   ID: `{u['user_id']}` | {uname}\n"
+
+    # Pagination controls
+    nav_buttons = []
+    if page > 0:
+        nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_view_users_{page - 1}"))
+    if (page + 1) * page_size < total_users:
+        nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f"admin_view_users_{page + 1}"))
+
+    keyboard = []
+    if nav_buttons:
+        keyboard.append(nav_buttons)
+    keyboard.append([InlineKeyboardButton("⬅️ Back to Panel", callback_data="admin_panel_back")])
+
+    await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+async def broadcast_prompt(query):
+    await query.edit_message_text(
+        "📢 *Send the broadcast message:*\n\n"
+        "You can send text, photos, documents, or videos. "
+        "Type /cancel to abort.",
+        parse_mode="Markdown"
+    )
+    return BROADCAST_MSG
+
+async def broadcast_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return ConversationHandler.END
+
+    status_msg = await update.message.reply_text("⏳ Broadcast in progress...")
+    
+    users_cursor = users_col.find({}, {"user_id": 1})
+    sent_count = 0
+    fail_count = 0
+
+    async for doc in users_cursor:
+        uid = doc["user_id"]
+        try:
+            # Forwards any message type (Text, Photo, Document, Audio, etc.)
+            await update.message.copy(chat_id=uid)
+            sent_count += 1
+            await asyncio.sleep(0.05)  # Prevents Telegram flood limits (max 30 msgs/sec)
+        except TelegramError:
+            fail_count += 1
+
+    await status_msg.edit_text(
+        f"✅ *Broadcast Complete!*\n\n"
+        f"• Successfully sent: `{sent_count}`\n"
+        f"• Failed/Blocked: `{fail_count}`",
+        parse_mode="Markdown"
+    )
+    return ConversationHandler.END
+
+async def admin_callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+
+    if query.from_user.id != ADMIN_ID:
+        await query.answer("⛔ Access denied.", show_alert=True)
+        return
+
+    if data == "admin_refresh":
+        return await admin_panel(update, context)
+
+    elif data == "admin_panel_back":
+        await query.answer()
+        return await admin_panel(update, context)
+
+    elif data.startswith("admin_view_users_"):
+        await query.answer()
+        page = int(data.split("_")[-1])
+        return await show_users_data(query, page)
+
+    elif data == "admin_broadcast_prompt":
+        await query.answer()
+        return await broadcast_prompt(query)
+
+    elif data == "admin_close":
+        await query.answer()
+        await query.message.delete()
+        await query.message.reply_text("Admin panel closed.")
+        return ConversationHandler.END
+
 # --- Login Flow ---
 async def login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if 'token' in context.user_data:
@@ -1411,10 +1565,13 @@ def main():
             CommandHandler('logout', logout_start),
             CommandHandler('repositories', repositories), 
             CommandHandler('search', search_cmd),
-            CommandHandler('create', create_cmd)
+            CommandHandler('create', create_cmd),
+            CommandHandler("admin", admin_panel),
+            CallbackQueryHandler(admin_callback_router, pattern="^admin_")
         ],
         states={
             LOGIN: [MessageHandler(filters.TEXT & ~filters.COMMAND, login_process)],
+            BROADCAST_MSG: [MessageHandler(~filters.COMMAND, broadcast_execute)],
             CREATE_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, create_finish)],
             SEARCH_QUERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, search_process)],
             
@@ -1445,7 +1602,10 @@ def main():
             CREATE_REL_ASSETS: [MessageHandler(filters.Document.ALL & ~filters.COMMAND, process_incoming_file_asset_uploads)],
             CONFIRM_ACTION: [CallbackQueryHandler(confirm_action_handler, pattern="^conf_")]
         },
-        fallbacks=[CommandHandler('cancel', cancel)],
+        fallbacks=[
+            CommandHandler('cancel', cancel),
+            CallbackQueryHandler(admin_callback_router, pattern="^admin_")
+        ]
     )    
     app.add_handler(conv)
     app.run_polling()
