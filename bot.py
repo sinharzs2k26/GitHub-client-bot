@@ -208,7 +208,6 @@ async def show_users_data(query, page=0):
         uname = f"@{u['username']}" if u.get('username') else "No Username"
         text += f"{idx}. *{u.get('name', 'N/A')}*\n   ID: `{u['user_id']}` | {uname}\n"
 
-    # Pagination controls
     nav_buttons = []
     if page > 0:
         nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f"admin_view_users_{page - 1}"))
@@ -244,10 +243,9 @@ async def broadcast_execute(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async for doc in users_cursor:
         uid = doc["user_id"]
         try:
-            # Forwards any message type (Text, Photo, Document, Audio, etc.)
             await update.message.copy(chat_id=uid)
             sent_count += 1
-            await asyncio.sleep(0.05)  # Prevents Telegram flood limits (max 30 msgs/sec)
+            await asyncio.sleep(0.05)
         except TelegramError:
             fail_count += 1
 
@@ -298,17 +296,74 @@ async def login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return LOGIN
 
 async def login_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    token = update.message.text
+    token = update.message.text.strip()
+    user_id = update.effective_user.id
+    
     res = github_req("GET", "/user", token)
     if res.status_code == 200:
-        context.user_data['token'] = token
-        await update.message.reply_text(f"✅ Logged in as {res.json()['login']}!\n\nIf you want to logout, send /logout.")
+        gh_data = res.json()
+        gh_username = gh_data.get("login")
+        
+        context.user_data["token"] = token
+        context.user_data["gh_user"] = gh_username
+        
+        await users_col.update_one(
+            {"user_id": user_id},
+            {
+                "$set": {
+                    "github_token": token,
+                    "github_username": gh_username,
+                    "name": update.effective_user.full_name,
+                    "username": update.effective_user.username
+                }
+            },
+            upsert=True
+        )
+        
+        try:
+            await update.message.delete()
+        except TelegramError:
+            pass
+
+        await update.message.reply_text(
+            f"✅ Logged in successfully as *{gh_username}*!\n"
+            "Your session is securely saved across server restarts.\n\n"
+            "Use `/list_repos` to start browsing.",
+            parse_mode="Markdown"
+        )
         return ConversationHandler.END
-    await update.message.reply_text("❌ Invalid Token. Use /login to try again.")
-    return ConversationHandler.END
+    else:
+        await update.message.reply_text(
+            "❌ Invalid Personal Access Token or missing permissions. Please verify and try again:"
+        )
+        return LOGIN
+
+async def get_user_token(update: Update, context: ContextTypes.DEFAULT_TYPE) -> str | None:
+    token = context.user_data.get("token")
+    if token:
+        return token
+    
+    if not update or not update.effective_user:
+        return None
+
+    user_id = update.effective_user.id
+
+    user_doc = await users_col.find_one(
+        {"user_id": user_id}, 
+        {"github_token": 1, "github_username": 1}
+    )
+    
+    if user_doc and user_doc.get("github_token"):
+        restored_token = user_doc["github_token"]
+        context.user_data["token"] = restored_token
+        context.user_data["gh_user"] = user_doc.get("github_username")
+        return restored_token
+        
+    return None
 
 async def logout_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if 'token' in context.user_data:
+    token = await get_user_token(update, context)
+    if token:
         kb = [
             [InlineKeyboardButton("⚠️ Yes, I'm sure!", callback_data="conf_pat_yes")],
             [InlineKeyboardButton("❌ Cancel", callback_data="conf_pat_no")]
@@ -324,7 +379,7 @@ async def logout_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- List & Search ---
 async def repositories(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    token = context.user_data.get('token')
+    token = await get_user_token(update, context)
     if not token:
         await update.message.reply_text("Please /login first.")
         return ConversationHandler.END
@@ -351,7 +406,7 @@ async def search_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return SEARCH_QUERY
 
 async def search_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     res = github_req("GET", "/user/repos?per_page=100", token)
     if update.message:
         context.user_data['search_repo'] = update.message.text
@@ -375,7 +430,7 @@ async def search_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # --- Management Menu ---
 async def send_repo_management_menu(update, query, context):
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     repo = context.user_data['active_repo']
     repo_name = repo.rsplit('/', 1)[-1]
     res = github_req("GET", f"/repos/{repo}", token).json()
@@ -453,7 +508,7 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     repo = context.user_data['active_repo']
     repo_name = repo.rsplit('/', 1)[-1]
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     restricted_actions = ["m_newf", "m_rename", "f_edit", "f_ren", "f_del"]
 
     if action in restricted_actions:
@@ -519,7 +574,7 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "f_edit":
             await query.answer()
-            return await initiate_file_edit(query, context)
+            return await initiate_file_edit(update, query, context)
 
     elif action == "f_ren":
         await query.answer()
@@ -544,12 +599,12 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif action == "rel_list_view":
         await query.answer()
-        return await show_releases_tags_dashboard(query, context, tab="releases")
+        return await show_releases_tags_dashboard(update, query, context, tab="releases")
 
     elif action.startswith("rel_tab_switch_"):
         await query.answer()
         target_tab = action.replace("rel_tab_switch_", "")
-        return await show_releases_tags_dashboard(query, context, tab=target_tab)
+        return await show_releases_tags_dashboard(update, query, context, tab=target_tab)
 
     elif action.startswith("show_rel_"):
         await query.answer()
@@ -566,7 +621,7 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action.startswith("rel_del_req_"):
         await query.answer()
-        return await release_delete_request(query, context, action.replace("rel_del_req_", ""))
+        return await release_delete_request(update, query, context, action.replace("rel_del_req_", ""))
 
     elif action.startswith("rel_del_confirm_"):
         return await release_delete_execute(query, context, action.replace("rel_del_confirm_", ""))
@@ -576,11 +631,11 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await tag_delete_request(query, context, action.replace("tag_del_req_", ""))
 
     elif action.startswith("tag_del_confirm_"):
-        return await tag_delete_execute(query, context, action.replace("tag_del_confirm_", ""))
+        return await tag_delete_execute(update,query, context, action.replace("tag_del_confirm_", ""))
 
     elif action.startswith("rel_assets_"):
         await query.answer()
-        return await show_release_assets(query, context, action.replace("rel_assets_", ""))
+        return await show_release_assets(update, query, context, action.replace("rel_assets_", ""))
 
     elif action == "rel_edit_title":
         await query.answer()
@@ -593,11 +648,11 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif action.startswith("lbl_set_"):
         await query.answer()
         choice = action.replace("lbl_set_", "")
-        return await rel_create_execute(query, context, choice)
+        return await rel_create_execute(update, query, context, choice)
 
     elif action == "rel_edit_lbl_menu":
         await query.answer()
-        return await show_edit_label_menu(query, context)
+        return await show_edit_label_menu(update, query, context)
 
     elif action.startswith("edit_lbl_save_"):
         await query.answer()
@@ -610,7 +665,7 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif action == "rel_asset_del_list":
         await query.answer()
-        return await list_release_assets_for_deletion(query, context)
+        return await list_release_assets_for_deletion(update, query, context)
 
     elif action == "rel_edit_tag":
         await query.answer()
@@ -622,7 +677,7 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif action.startswith("as_del_conf_"):
         await query.answer()
-        return await delete_asset_execute(query, context, action.replace("as_del_conf_", ""))
+        return await delete_asset_execute(update, query, context, action.replace("as_del_conf_", ""))
 
     elif action.startswith("save_tag_shift_"):
         await query.answer()
@@ -638,7 +693,7 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
     elif action == "rel_create_start":
         await query.answer()
-        return await rel_create_start(query, context)
+        return await rel_create_start(update, query, context)
 
     elif action == "cr_tag_manual_prompt":
         await query.answer()
@@ -646,7 +701,7 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     elif action.startswith("cr_tag_"):
         await query.answer()
-        return await rel_create_target_step(query, context, action.replace("cr_tag_", ""))
+        return await rel_create_target_step(update, query, context, action.replace("cr_tag_", ""))
 
     elif action.startswith("cr_targ_"):
         await query.answer()
@@ -659,7 +714,7 @@ async def manager_actions(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Browse & Download Logic ---
 async def codes(update, query, context):
     repo = context.user_data['active_repo']
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     
     res = github_req("GET", f"/repos/{repo}/contents/", token).json()
     kb = [[InlineKeyboardButton(f"{'📁' if i['type']=='dir' else '📄'} {i['name']}", callback_data=f"view_{i['type']}_{i['path']}")] for i in res]
@@ -728,7 +783,7 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def rename_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_name = update.message.text
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     
     data = {"name": new_name}
     res = github_req("PATCH", f"/repos/{repo}", token, data)
@@ -750,7 +805,7 @@ async def new_file_content_step(update: Update, context: ContextTypes.DEFAULT_TY
 async def new_file_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     repo = context.user_data['active_repo']
     path = context.user_data['new_file_path']
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     
     if update.message.text:
         content = update.message.text
@@ -781,7 +836,7 @@ async def new_file_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(f"❌ Error: {res.json().get('message')}")
     
-async def initiate_file_edit(query, context):
+async def initiate_file_edit(update, query, context):
     context.user_data['user_state'] = EDIT_FILE_CONTENT
     repo = context.user_data.get('active_repo')
     file_path = context.user_data['active_file']['path']
@@ -799,7 +854,7 @@ async def initiate_file_edit(query, context):
         return EDIT_FILE_CONTENT
     else:
         context.user_data['is_media'] = False
-        token = context.user_data['token']
+        token = await get_user_token(update, context)
         res = github_req("GET", f"/repos/{repo}/contents/{file_path}", token)
         if res.status_code == 200:
             file_data = res.json()
@@ -827,7 +882,7 @@ async def initiate_file_edit(query, context):
                               
 async def edit_file_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     file_path = context.user_data.get('active_file')['path']
     filename = file_path.split('/')[-1]
     is_media = context.user_data.get('is_media', False)
@@ -882,7 +937,7 @@ async def edit_file_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def rename_file_finish(update: Update, context: ContextTypes.DEFAULT_TYPE):
     new_name = update.message.text
     repo = context.user_data.get('active_repo')
-    token = context.user_data.get('token')
+    token = await get_user_token(update, context)
     file_obj = context.user_data.get('active_file')
     
     if not file_obj:
@@ -915,10 +970,10 @@ async def rename_file_finish(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
     return await view_item_callback(update, context)
 
-async def show_releases_tags_dashboard(query, context, tab="releases"):
+async def show_releases_tags_dashboard(update, query, context, tab="releases"):
     repo = context.user_data.get('active_repo')
     repo_name = repo.rsplit('/', 1)[-1]
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     context.user_data['rel_view_tab'] = tab
 
     rel_emoji = "🔹 " if tab == "releases" else ""
@@ -978,7 +1033,7 @@ async def show_releases_tags_dashboard(query, context, tab="releases"):
 
 async def show_release_details(update, query, context, release_id):
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     
     res = github_req("GET", f"/repos/{repo}/releases/{release_id}", token)
     if res.status_code != 200:
@@ -1059,14 +1114,14 @@ async def release_delete_request(query, context, release_id):
     )
     return RELEASE_MENU
 
-async def release_delete_execute(query, context, release_id):
+async def release_delete_execute(update, query, context, release_id):
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
 
     res = github_req("DELETE", f"/repos/{repo}/releases/{release_id}", token)
     if res.status_code == 204:
         await query.answer("✅ Release deleted successfully!", show_alert=True)
-        return await show_releases_tags_dashboard(query, context, tab="releases")
+        return await show_releases_tags_dashboard(update, query, context, tab="releases")
     else:
         await query.answer("❌ Could not delete release from GitHub.", show_alert=True)
         return RELEASE_MENU
@@ -1087,21 +1142,21 @@ async def tag_delete_request(query, context, tag_name):
     )
     return RELEASE_MENU
 
-async def tag_delete_execute(query, context, tag_name):
+async def tag_delete_execute(update, query, context, tag_name):
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
 
     res = github_req("DELETE", f"/repos/{repo}/git/refs/tags/{tag_name}", token)
     if res.status_code == 204:
         await query.answer(f"✅ Tag {tag_name} deleted!", show_alert=True)
-        return await show_releases_tags_dashboard(query, context, tab="tags")
+        return await show_releases_tags_dashboard(update, query, context, tab="tags")
     else:
         await query.answer("❌ Failed to delete tag. It might be protected.", show_alert=True)
         return RELEASE_MENU
 
-async def show_release_assets(query, context, release_id):
+async def show_release_assets(update, query, context, release_id):
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     
     res = github_req("GET", f"/repos/{repo}/releases/{release_id}", token)
     if res.status_code != 200:
@@ -1136,7 +1191,7 @@ async def download_release_asset(update: Update, context: ContextTypes.DEFAULT_T
     asset_id = query.data.replace("as_down_", "")
     repo = context.user_data.get('active_repo')
     repo_name = repo.rsplit('/', 1)[-1]
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
 
     headers = {
         "Authorization": f"token {token}",
@@ -1173,7 +1228,7 @@ async def save_release_field_edit(update: Update, context: ContextTypes.DEFAULT_
     field_type = context.user_data.get('edit_target_field')
     rel_id = context.user_data.get('active_release_id')
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     query = update.callback_query
 
     payload = {}
@@ -1192,10 +1247,10 @@ async def save_release_field_edit(update: Update, context: ContextTypes.DEFAULT_
         
     return await show_release_edit_menu(update, query, context)
 
-async def show_edit_label_menu(query, context):
+async def show_edit_label_menu(update, query, context):
     rel = context.user_data.get('active_release')
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
 
     latest_id = None
     latest_res = github_req("GET", f"/repos/{repo}/releases/latest", token)
@@ -1222,7 +1277,7 @@ async def show_edit_label_menu(query, context):
 
 async def save_release_label_edit(update, query, context, label_choice):
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     rel_id = context.user_data.get('active_release_id')
     
     payload = {}
@@ -1245,10 +1300,10 @@ async def save_release_label_edit(update, query, context, label_choice):
         
     return await show_release_edit_menu(update, query, context)
 
-async def list_release_assets_for_deletion(query, context):
+async def list_release_assets_for_deletion(update, query, context):
     rel = context.user_data.get('active_release')
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     
     res = github_req("GET", f"/repos/{repo}/releases/{rel['id']}", token)
     assets = res.json().get('assets', []) if res.status_code == 200 else []
@@ -1278,9 +1333,9 @@ async def asset_delete_request(query, asset_info):
     )
     return RELEASE_MENU
 
-async def delete_asset_execute(query, context, asset_id):
+async def delete_asset_execute(update, query, context, asset_id):
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     rel_id = context.user_data.get('active_release_id')
 
     headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github+json"}
@@ -1291,7 +1346,7 @@ async def delete_asset_execute(query, context, asset_id):
     else:
         await query.answer("❌ Failed to clear asset from GitHub references.", show_alert=True)
         
-    return await list_release_assets_for_deletion(query, context)
+    return await list_release_assets_for_deletion(update, query, context)
 
 async def initiate_asset_upload(query, context):
     await query.edit_message_text("📥 *Send the file* you want to attach as a Release Asset:", parse_mode='Markdown')
@@ -1308,7 +1363,7 @@ async def upload_asset_to_github(repo, release_id, token, file_bytes, filename):
 
 async def show_tags_for_release_edit(update, query, context):
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     rel = context.user_data.get('active_release')
     
     res = github_req("GET", f"/repos/{repo}/tags", token)
@@ -1340,7 +1395,7 @@ async def tag_shift_manual_save(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def save_release_tag_shift(update, query, context, new_tag):
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     rel_id = context.user_data.get('active_release_id')
     
     res = github_req("PATCH", f"/repos/{repo}/releases/{rel_id}", token, {"tag_name": new_tag})
@@ -1357,10 +1412,10 @@ async def save_release_tag_shift(update, query, context, new_tag):
             await update.message.reply_text("❌ Refused by GitHub. Check tag constraints.")
     return await show_release_details(update, query, context, rel_id)
 
-async def rel_create_start(query, context):
+async def rel_create_start(update, query, context):
     context.user_data['new_repo'] = "YES"
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     context.user_data['new_rel_payload'] = {}
     
     res = github_req("GET", f"/repos/{repo}/tags", token)
@@ -1384,7 +1439,7 @@ async def rel_create_tag_manual_save(update: Update, context: ContextTypes.DEFAU
     context.user_data['new_rel_payload']['tag_name'] = user_typed_tag
     
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     
     res = github_req("GET", f"/repos/{repo}/branches", token)
     keyboard = []
@@ -1399,10 +1454,10 @@ async def rel_create_tag_manual_save(update: Update, context: ContextTypes.DEFAU
     )
     return CREATE_REL_TARGET
 
-async def rel_create_target_step(query, context, selected_tag):
+async def rel_create_target_step(update, query, context, selected_tag):
     context.user_data['new_rel_payload']['tag_name'] = selected_tag
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     
     res = github_req("GET", f"/repos/{repo}/branches", token)
     keyboard = []
@@ -1426,7 +1481,6 @@ async def rel_create_desc_prompt(update: Update, context: ContextTypes.DEFAULT_T
 async def rel_create_label_prompt(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['new_rel_payload']['body'] = update.message.text
     
-    # Present the label options as buttons
     keyboard = [
         [InlineKeyboardButton("⚪ None (Standard)", callback_data="lbl_set_none")],
         [InlineKeyboardButton("🟠 Pre-release", callback_data="lbl_set_pre")],
@@ -1440,12 +1494,11 @@ async def rel_create_label_prompt(update: Update, context: ContextTypes.DEFAULT_
     )
     return CREATE_REL_LABEL
 
-async def rel_create_execute(query, context, label_choice):
+async def rel_create_execute(update, query, context, label_choice):
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     payload = context.user_data['new_rel_payload']
     
-    # Inject API parameters based on your structural rules
     if label_choice == "none":
         payload["prerelease"] = False
         payload["make_latest"] = "false"
@@ -1482,7 +1535,7 @@ async def process_incoming_file_asset_uploads(update: Update, context: ContextTy
         
     doc = update.message.document
     repo = context.user_data.get('active_repo')
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     release_id = context.user_data.get('active_release_id')
     
     tg_file = await context.bot.get_file(doc.file_id)
@@ -1516,7 +1569,7 @@ async def confirm_action_handler(update: Update, context: ContextTypes.DEFAULT_T
         await query.edit_message_text("🚫 Logout cancelled by you.")
         return ConversationHandler.END
         
-    token = context.user_data['token']
+    token = await get_user_token(update, context)
     repo = context.user_data['active_repo']
 
     if query.data == "conf_repo_yes":
