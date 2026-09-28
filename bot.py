@@ -113,7 +113,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "🏁 **Quick Start Guide:**\n"
                 "/login — Authenticate securely with your GitHub Personal Access Token (PAT)\n"
                 "/repositories — Browse & manage your repositories\n"
-                "/help — View full feature details & step-by-step guides\n\n"
+                "/help — View full feature details & step-by-step guides\n\n" \
+                "Bot owner: [ᴀʜɴᴀғ sᴀɪᴋᴀᴛ](https://t.me/ahnafsaikat08)"
             )
     await update.message.reply_text(text, parse_mode="Markdown")
     return ConversationHandler.END
@@ -293,7 +294,7 @@ async def login_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if token:
         await update.message.reply_text("You are already logged in!")
     else:
-        await update.message.reply_text("🔑 Please send your GitHub Personal Access Token (PAT):\nOr /cancel.")
+        await update.message.reply_text("🔑 Please send your GitHub Personal Access Token (PAT):\nOr /cancel ❌")
         return LOGIN
 
 async def login_process(update: Update, context: ContextTypes.DEFAULT_TYPE):
